@@ -86,8 +86,10 @@ class LieTrotter(ProductFormula):
         wrap = not (len(pauli_list) == 1 and self.reps == 1)
 
         for i, (op, coeff) in enumerate(pauli_list):
+            defintion, qubits = self.atomic_evolution(op, coeff * time / self.reps, local=True)
+            qubits = [evolution_circuit.qubits[q] for q in qubits]
             evolution_circuit.compose(
-                self.atomic_evolution(op, coeff * time / self.reps), wrap=wrap, inplace=True
+                defintion, qubits=qubits, wrap=wrap, inplace=True
             )
             if self.insert_barriers and i != len(pauli_list) - 1:
                 evolution_circuit.barrier()

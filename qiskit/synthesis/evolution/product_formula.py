@@ -93,6 +93,7 @@ def evolve_pauli(
     time: Union[float, ParameterExpression] = 1.0,
     cx_structure: str = "chain",
     label: Optional[str] = None,
+    local: bool = False,
 ) -> QuantumCircuit:
     r"""Construct a circuit implementing the time evolution of a single Pauli string.
 
@@ -126,12 +127,17 @@ def evolve_pauli(
         definition = _single_qubit_evolution(pauli, time)
     # same for two qubits, use Qiskit's native rotations
     elif num_non_identity == 2:
-        definition = _two_qubit_evolution(pauli, time, cx_structure)
+        definition = _two_qubit_evolution(pauli, time, cx_structure, local=local)
+        if local:
+            definition, qubits = definition
     # otherwise do basis transformation and CX chains
     else:
         definition = _multi_qubit_evolution(pauli, time, cx_structure)
 
     definition.name = f"exp(it {pauli.to_label()})"
+
+    if local:
+        return definition, qubits
 
     return definition
 
@@ -151,7 +157,7 @@ def _single_qubit_evolution(pauli, time):
     return definition
 
 
-def _two_qubit_evolution(pauli, time, cx_structure):
+def _two_qubit_evolution(pauli, time, cx_structure, local=False):
     # Get the Paulis and the qubits they act on.
     # Note that all phases are removed from the pauli label and are only in the coefficients.
     # That's because the operators we evolved have all been translated to a SparsePauliOp.
@@ -159,21 +165,42 @@ def _two_qubit_evolution(pauli, time, cx_structure):
     qubits = np.where(labels_as_array != "I")[0]
     labels = np.array([labels_as_array[idx] for idx in qubits])
 
-    definition = QuantumCircuit(pauli.num_qubits)
+    if local:
+        definition = QuantumCircuit(len(qubits))
+    else:
+        definition = QuantumCircuit(pauli.num_qubits)
 
     # go through all cases we have implemented in Qiskit
     if all(labels == "X"):  # RXX
-        definition.rxx(2 * time, qubits[0], qubits[1])
+        if local:
+            definition.rxx(2 * time, 0, 1)
+        else:
+            definition.rxx(2 * time, qubits[0], qubits[1])
     elif all(labels == "Y"):  # RYY
-        definition.ryy(2 * time, qubits[0], qubits[1])
+        if local:
+            definition.ryy(2 * time, 0, 1)
+        else:
+            definition.ryy(2 * time, qubits[0], qubits[1])
     elif all(labels == "Z"):  # RZZ
-        definition.rzz(2 * time, qubits[0], qubits[1])
+        if local:
+            definition.rzz(2 * time, 0, 1)
+        else:
+            definition.rzz(2 * time, qubits[0], qubits[1])
     elif labels[0] == "Z" and labels[1] == "X":  # RZX
-        definition.rzx(2 * time, qubits[0], qubits[1])
+        if local:
+            definition.rzx(2 * time, 0, 1)
+        else:
+            definition.rzx(2 * time, qubits[0], qubits[1])
     elif labels[0] == "X" and labels[1] == "Z":  # RXZ
-        definition.rzx(2 * time, qubits[1], qubits[0])
+        if local:
+            definition.rzx(2 * time, 1, 0)
+        else:
+            definition.rzx(2 * time, qubits[1], qubits[0])
     else:  # all the others are not native in Qiskit, so use default the decomposition
         definition = _multi_qubit_evolution(pauli, time, cx_structure)
+
+    if local:
+        return definition, qubits
 
     return definition
 
@@ -313,16 +340,17 @@ def cnot_fountain(pauli: Pauli) -> QuantumCircuit:
     return chain
 
 
-def _default_atomic_evolution(operator, time, cx_structure):
+def _default_atomic_evolution(operator, time, cx_structure, local):
     if isinstance(operator, Pauli):
         # single Pauli operator: just exponentiate it
-        evolution_circuit = evolve_pauli(operator, time, cx_structure)
+        return evolve_pauli(operator, time, cx_structure, local=local)
     else:
         # sum of Pauli operators: exponentiate each term (this assumes they commute)
         pauli_list = [(Pauli(op), np.real(coeff)) for op, coeff in operator.to_list()]
         name = f"exp(it {[pauli.to_label() for pauli, _ in pauli_list]})"
         evolution_circuit = QuantumCircuit(operator.num_qubits, name=name)
         for pauli, coeff in pauli_list:
-            evolution_circuit.compose(evolve_pauli(pauli, coeff * time, cx_structure), inplace=True)
+            definition, qubits = evolve_pauli(pauli, coeff * time, cx_structure, local=local)
+            evolution_circuit.compose(definition, qubits=qubits, inplace=True)
 
     return evolution_circuit
